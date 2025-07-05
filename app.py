@@ -49,7 +49,7 @@ st.title("🧮 Calculadora de Pensión IMSS (Ley 73) – Modalidades 10 y 40")
 # Datos personales
 fecha_nac = st.date_input("📅 Fecha de nacimiento")
 anio_alta = st.number_input("🧾 Año de alta en el IMSS", min_value=1950, max_value=2025, value=1996)
-cotiza_pre97 = st.radio("¿Cotizaste antes del 1 de julio de 1997?", ["Sí", "No"]) == "Sí"
+respuesta_pre97 = st.radio("¿Cotizaste antes del 1 de julio de 1997?", ["Sí", "No"]) cotiza_pre97 - respuesta_pre97 == "Sí"
 edad_actual = calcular_edad(fecha_nac)
 st.write(f"👤 Edad actual: **{edad_actual} años**")
 

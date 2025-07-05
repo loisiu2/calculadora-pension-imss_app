@@ -49,7 +49,8 @@ st.title("🧮 Calculadora de Pensión IMSS (Ley 73) – Modalidades 10 y 40")
 # Datos personales
 fecha_nac = st.date_input("📅 Fecha de nacimiento")
 anio_alta = st.number_input("🧾 Año de alta en el IMSS", min_value=1950, max_value=2025, value=1996)
-respuesta_pre97 = st.radio("¿Cotizaste antes del 1 de julio de 1997?", ["Sí", "No"]) cotiza_pre97 = respuesta_pre97 == "Sí"
+respuesta_pre97 = st.radio("¿Cotizaste antes del 1 de julio de 1997?", ["Sí", "No"])
+cotiza_pre97 = respuesta_pre97 == "Sí"
 edad_actual = calcular_edad(fecha_nac)
 st.write(f"👤 Edad actual: **{edad_actual} años**")
 
@@ -78,3 +79,17 @@ if cotiza_pre97:
     salario_base = salario_mod40 or salario_mod10 or 0
     pension = calcular_pension(salario_base, total_semanas, edad_retiro)
     st.success(f"💵 Pensión estimada a los {edad_retiro}: **${pension:,.2f} MXN mensuales**")
+
+    # Modalidad 40 inversión
+    if usa_mod40:
+        mensualidad_m40 = calcular_costo_m40(salario_mod40)
+        total_m40 = mensualidad_m40 * (semanas_mod40 / 4.3)
+        st.info(f"💰 Aportarías **${mensualidad_m40:,.2f}/mes** en M40. Total aprox: **${total_m40:,.2f}**")
+
+        if st.checkbox("¿Mostrar tiempo de recuperación de inversión?"):
+            meses = calcular_recuperacion(total_m40, pension)
+            st.write(f"📊 Recuperarías tu inversión en **{meses} meses**")
+
+    # Comparativa por edad
+    if st.checkbox("Comparar pensión entre 60 y 65 años"):
+        st.subheader("📉 Comparativa d

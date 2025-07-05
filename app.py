@@ -92,4 +92,12 @@ if cotiza_pre97:
 
     # Comparativa por edad
     if st.checkbox("Comparar pensión entre 60 y 65 años"):
-        st.subheader("📉 Comparativa d
+        st.subheader("📉 Comparativa de pensión por edad")
+        data = []
+        for edad in range(60, 66):
+            pension_edad = calcular_pension(salario_base, total_semanas, edad)
+            data.append({"Edad": edad, "Pensión ($MXN)": pension_edad})
+        st.table(data)
+
+else:
+    st.error("❌ No puedes pensionarte por Ley 73. Debes haber cotizado antes del 1 de julio de 1997.")

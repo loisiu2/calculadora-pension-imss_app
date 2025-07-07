@@ -1,106 +1,148 @@
-from datetime import date
 import streamlit as st
+import pandas as pd
+import plotly.express as px
+from datetime import datetime, date
 
-# Constantes actualizadas (revisar valor oficial)
-UMA_DIARIA = 144.58  # Ejemplo para 2025, actualizar según el valor oficial
-DIAS_POR_MES = 30.4
-UMA_MENSUAL = UMA_DIARIA * DIAS_POR_MES
-SALARIO_MINIMO_DIARIO = 207.44  # Salario mínimo general diario en México 2024-2025, ajustar según oficial
+# Constantes (2025)
+UMA_DIARIA = 145.01  # UMA diaria estimada
+INPC_ANUAL = 0.045   # Inflación estimada
+MAX_SALARIO_M40 = 25 * UMA_DIARIA * 30  # ~$108,750 MXN
+SEM_L97_2025 = 850   # Semanas requeridas Ley 97 en 2025
 
-# Tabla de porcentajes según edad de retiro (Ley 73)
-porcentajes_edad = {
-    60: 0.75,
-    61: 0.80,
-    62: 0.85,
-    63: 0.90,
-    64: 0.95,
-    65: 1.00
-}
+# Funciones de cálculo
+def semanas_totales(semanas_act, semanas_mod10, semanas_mod40):
+    """Suma las semanas cotizadas totales."""
+    return semanas_act + semanas_mod10 + semanas_mod40
 
-def calcular_edad(fecha_nac):
-    hoy = date.today()
-    if fecha_nac > hoy:
+def calcular_pension_l73(salario_base, total_semanas, edad_retiro, edad_actual):
+    """Calcula la pensión según Ley 73."""
+    if total_semanas < 500:
         return 0
-    edad = hoy.year - fecha_nac.year
-    if (hoy.month, hoy.day) < (fecha_nac.month, fecha_nac.day):
-        edad -= 1
-    return edad
+    porcentajes = {60: 0.75, 61: 0.80, 62: 0.85, 63: 0.90, 64: 0.95, 65: 1.0}
+    porcentaje = porcentajes.get(edad_retiro, 1.0)
+    cuantia_basica = 4000  # Simplificada, ajustar con tabla IMSS
+    incremento = (max(0, total_semanas - 500) // 52) * 0.01
+    pension = (salario_base * porcentaje + cuantia_basica) * (1 + incremento)
+    años_faltantes = max(0, edad_retiro - edad_actual)
+    pension = pension * (1 + INPC_ANUAL) ** años_faltantes
+    return pension
 
-def semanas_totales(actuales, mod10=0, mod40=0):
-    return actuales + mod10 + mod40
+def calcular_costo_m40(salario_mensual, semanas_mod40):
+    """Calcula el costo de Modalidad 40."""
+    cuota_mensual = salario_mensual * 0.10075  # ~10.075%
+    total_m40 = cuota_mensual * (semanas_mod40 / 4.3)
+    return cuota_mensual, total_m40
 
-def calcular_pension(salario_mensual, semanas_totales, edad_retiro):
-    salario_diario = salario_mensual / DIAS_POR_MES
-    salario_uma = salario_diario / UMA_DIARIA
-    semanas_excedentes = max(0, semanas_totales - 500)
-    incremento = (semanas_excedentes // 52) * 0.052 * salario_uma
-    cuantia_basica_diaria = 1.0 + incremento
-    # Aplicar mínimo salario diario en UMAs para pensión mínima
-    minimo_diario_umas = SALARIO_MINIMO_DIARIO / UMA_DIARIA
-    if cuantia_basica_diaria < minimo_diario_umas:
-        cuantia_basica_diaria = minimo_diario_umas
-    cuantia_mensual = cuantia_basica_diaria * UMA_DIARIA * DIAS_POR_MES
-    factor_edad = porcentajes_edad.get(edad_retiro, 1.0)
-    pension_final = cuantia_mensual * factor_edad
-    return round(pension_final, 2)
+def calcular_pension_l97(saldo_afore, edad_retiro, edad_actual, rendimiento_anual):
+    """Estima la pensión según Ley 97 (renta vitalicia aproximada)."""
+    años_faltantes = max(0, edad_retiro - edad_actual)
+    saldo_proyectado = saldo_afore * (1 + rendimiento_anual) ** años_faltantes
+    pension_anual = saldo_proyectado * 0.04  # 4% del saldo
+    return pension_anual / 12
 
-def calcular_costo_m40(salario_mensual):
-    return round(salario_mensual * 0.10075, 2)
+def semanas_requeridas_l97(año_actual, año_retiro):
+    """Calcula semanas requeridas para Ley 97 según el año."""
+    año_base = 2025
+    semanas_base = 850
+    incremento_anual = 25
+    años_transcurridos = max(0, min(año_retiro, año_actual) - año_base)
+    semanas_requeridas = min(semanas_base + incremento_anual * años_transcurridos, 1000)
+    return semanas_requeridas
 
-def calcular_recuperacion(inversion_total, pension_mensual):
-    if pension_mensual == 0:
-        return None
-    return round(inversion_total / pension_mensual, 1)
+# Interfaz de Streamlit
+st.title("Calculadora de Pensión IMSS 🇲🇽")
+st.write("Ingresa tus datos para proyectar tu pensión según Ley 73 o Ley 97.")
 
-# Interfaz Streamlit
-st.set_page_config(page_title="Calculadora IMSS", layout="centered")
-st.title("🧮 Calculadora de Pensión IMSS (Ley 73) – Modalidades 10 y 40")
+# Estado de la sesión
+if 'edad_actual' not in st.session_state:
+    st.session_state.edad_actual = 30
 
-# Inputs
-fecha_nac = st.date_input("📅 Fecha de nacimiento", max_value=date.today())
-anio_alta = st.number_input("🧾 Año de alta en el IMSS", min_value=1950, max_value=2025, value=1996)
-respuesta_pre97 = st.radio("¿Cotizaste antes del 1 de julio de 1997?", ["Sí", "No"])
-cotiza_pre97 = respuesta_pre97 == "Sí"
+# Fecha de alta en el IMSS
+st.subheader("Determina tu régimen")
+fecha_alta = st.date_input("Fecha de alta en el IMSS", value=date(1995, 1, 1))
+es_ley73 = fecha_alta < date(1997, 7, 1)
+régimen = "Ley 73" if es_ley73 else "Ley 97"
+st.write(f"**Régimen**: {régimen} {'(antes del 1 de julio de 1997)' if es_ley73 else '(a partir del 1 de julio de 1997)'}")
 
-edad_actual = calcular_edad(fecha_nac)
-st.write(f"👤 Edad actual: **{edad_actual} años**")
+# Entradas comunes
+edad_actual = st.number_input("Edad actual", 18, 100, value=30)
+st.session_state.edad_actual = edad_actual
+semanas_act = st.number_input("Semanas cotizadas actuales", 0, 5000, value=500)
+edad_retiro = st.slider("Edad de retiro proyectada", 60, 70, 65)
+año_actual = datetime.now().year
+año_retiro = año_actual + (edad_retiro - edad_actual)
 
-semanas_act = st.number_input("🔢 Semanas cotizadas actualmente", min_value=0, value=300)
+if es_ley73:
+    # Ley 73: Comparativo Modalidad 10 vs. Modalidad 40
+    st.subheader("Ley 73: Comparativo Modalidad 10 vs. Modalidad 40")
+    usa_mod10 = st.checkbox("¿Cotizarás en Modalidad 10?", key="mod10")
+    semanas_mod10 = st.number_input("Semanas en Modalidad 10", 0, 520, value=104) if usa_mod10 else 0
+    salario_mod10 = st.number_input("Salario mensual en Modalidad 10 ($MXN)", 1000.0, MAX_SALARIO_M40, value=12000.0) if usa_mod10 else 0
 
-usa_mod10 = st.checkbox("¿Vas a cotizar en Modalidad 10?")
-semanas_mod10 = st.number_input("Semanas en Modalidad 10", 0, 520, value=104) if usa_mod10 else 0
-salario_mod10 = st.number_input("Salario mensual en Modalidad 10 ($MXN)", 1000.0, 50000.0, value=12000.0) if usa_mod10 else 0
+    usa_mod40 = st.checkbox("¿Cotizarás en Modalidad 40?", key="mod40")
+    semanas_mod40 = st.number_input("Semanas en Modalidad 40", 0, 520, value=250) if usa_mod40 else 0
+    salario_mod40 = st.number_input("Salario mensual en Modalidad 40 ($MXN)", 1000.0, MAX_SALARIO_M40, value=50000.0) if usa_mod40 else 0
 
-usa_mod40 = st.checkbox("¿Vas a cotizar en Modalidad 40?")
-semanas_mod40 = st.number_input("Semanas en Modalidad 40", 0, 520, value=250) if usa_mod40 else 0
-salario_mod40 = st.number_input("Salario mensual en Modalidad 40 ($MXN)", 1000.0, 87750.0, value=50000.0) if usa_mod40 else 0
+    # Cálculos
+    total_semanas_mod10 = semanas_totales(semanas_act, semanas_mod10, 0)
+    total_semanas_mod40 = semanas_totales(semanas_act, 0, semanas_mod40)
+    pension_mod10 = calcular_pension_l73(salario_mod10, total_semanas_mod10, edad_retiro, edad_actual) if usa_mod10 else 0
+    pension_mod40 = calcular_pension_l73(salario_mod40, total_semanas_mod40, edad_retiro, edad_actual) if usa_mod40 else 0
+    cuota_mensual_m40, total_m40 = calcular_costo_m40(salario_mod40, semanas_mod40) if usa_mod40 else (0, 0)
+    recuperacion_m40 = total_m40 / pension_mod40 if pension_mod40 > 0 and usa_mod40 else float('inf')
 
-total_semanas = semanas_totales(semanas_act, semanas_mod10, semanas_mod40)
-st.markdown(f"📈 **Semanas proyectadas totales:** {total_semanas}")
+    # Comparativo
+    st.subheader("📊 Comparativo: Modalidad 10 vs. Modalidad 40")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### Modalidad 10")
+        st.write(f"**Semanas totales**: {total_semanas_mod10}")
+        st.write(f"**Pensión estimada**: ${pension_mod10:,.2f} MXN/mes")
+        st.write("**Costo mensual**: $0 (cotización regular)")
+        st.write("**Costo total**: $0")
+    with col2:
+        st.markdown("### Modalidad 40")
+        st.write(f"**Semanas totales**: {total_semanas_mod40}")
+        st.write(f"**Pensión estimada**: ${pension_mod40:,.2f} MXN/mes")
+        st.write(f"**Costo mensual**: ${cuota_mensual_m40:,.2f}")
+        st.write(f"**Costo total**: ${total_m40:,.2f}")
+        if usa_mod40:
+            st.write(f"**Recuperación de inversión**: {recuperacion_m40:.1f} meses")
 
-edad_retiro = st.slider("Edad de retiro proyectada", 60, 65, 60)
-
-if cotiza_pre97:
-    salario_base = salario_mod40 or salario_mod10 or 0
-    pension = calcular_pension(salario_base, total_semanas, edad_retiro)
-    st.success(f"💵 Pensión estimada a los {edad_retiro}: **${pension:,.2f} MXN mensuales**")
-
-    if usa_mod40:
-        mensualidad_m40 = calcular_costo_m40(salario_mod40)
-        total_m40 = mensualidad_m40 * (semanas_mod40 / 4.3)
-        st.info(f"💰 Aportarías **${mensualidad_m40:,.2f}/mes** en M40. Total aprox: **${total_m40:,.2f}**")
-
-        if st.checkbox("¿Mostrar tiempo de recuperación de inversión?"):
-            meses = calcular_recuperacion(total_m40, pension)
-            st.write(f"📊 Recuperarías tu inversión en **{meses} meses**")
-
-    if st.checkbox("Comparar pensión entre 60 y 65 años"):
-        st.subheader("📉 Comparativa de pensión por edad")
+    # Gráfico
+    if usa_mod10 or usa_mod40:
         data = []
-        for edad in range(60, 66):
-            pension_edad = calcular_pension(salario_base, total_semanas, edad)
-            data.append({"Edad": edad, "Pensión ($MXN)": pension_edad})
-        st.table(data)
+        if usa_mod10:
+            data.append({"Modalidad": "Modalidad 10", "Pensión ($MXN)": pension_mod10})
+        if usa_mod40:
+            data.append({"Modalidad": "Modalidad 40", "Pensión ($MXN)": pension_mod40})
+        df = pd.DataFrame(data)
+        fig = px.bar(df, x="Modalidad", y="Pensión ($MXN)", title="Comparativa de pensión")
+        st.plotly_chart(fig)
+
+    # Proyección de semanas faltantes
+    semanas_faltantes = max(0, 500 - max(total_semanas_mod10, total_semanas_mod40))
+    años_faltantes = semanas_faltantes / 52
+    st.write(f"**Proyección**: Necesitas **{semanas_faltantes} semanas** más (~{años_faltantes:.1f} años) para alcanzar las 500 semanas requeridas.")
 
 else:
-    st.error("❌ No puedes pensionarte por Ley 73. Debes haber cotizado antes del 1 de julio de 1997.")
+    # Ley 97: Proyección de Afore
+    st.subheader("Ley 97: Proyección de pensión por Afore")
+    saldo_afore = st.number_input("Saldo actual en tu Afore ($MXN)", 0.0, 10000000.0, value=500000.0)
+    rendimiento_anual = st.slider("Rendimientos anuales estimados (%)", 0.0, 10.0, 5.0) / 100
+    semanas_requeridas = semanas_requeridas_l97(año_actual, año_retiro)
+    pension_l97 = calcular_pension_l97(saldo_afore, edad_retiro, edad_actual, rendimiento_anual)
+
+    st.success(f"**Pensión estimada a los {edad_retiro}**: ${pension_l97:,.2f} MXN/mes")
+    semanas_faltantes = max(0, semanas_requeridas - semanas_act)
+    años_faltantes = semanas_faltantes / 52
+    st.write(f"**Proyección**: Necesitas **{semanas_faltantes} semanas** más (~{años_faltantes:.1f} años) para alcanzar las {semanas_requeridas} semanas requeridas en {año_retiro}.")
+
+# Explicaciones
+st.markdown("""
+### 📋 ¿Qué son Ley 73, Ley 97, Modalidad 10 y Modalidad 40?
+- **Ley 73**: Aplica si cotizaste antes del 1 de julio de 1997. Requiere 500 semanas cotizadas. La pensión se basa en el salario promedio de las últimas 250 semanas.
+- **Ley 97**: Aplica si cotizaste a partir del 1 de julio de 1997. Requiere 850 semanas en 2025, aumentando a 1,000 en 2031. La pensión depende del saldo en tu Afore.
+- **Modalidad 10**: Cotización regular basada en tu salario actual (sin costo adicional).
+- **Modalidad 40**: Cotización voluntaria para aumentar tu salario base (hasta ~$108,750 MXN/mes en 2025) y mejorar tu pensión (Ley 73).
+""")
